@@ -1,52 +1,47 @@
 package com.example.blefindmyboard
 
+import android.Manifest
+import android.bluetooth.*
+import android.bluetooth.le.BluetoothLeScanner
+import android.bluetooth.le.ScanCallback
+import android.bluetooth.le.ScanResult
+import android.content.Context
+import android.content.Intent
+import android.location.LocationManager
+import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.annotation.RequiresApi
+import androidx.annotation.RequiresPermission
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.*
+import androidx.compose.material3.Button
+import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow  // if you also use TextOverflow
-
-import android.bluetooth.BluetoothAdapter
-import android.bluetooth.BluetoothManager
-import android.bluetooth.le.ScanCallback
-import android.bluetooth.le.BluetoothLeScanner
-import android.bluetooth.le.ScanResult
-import android.content.Context
-import android.os.Build
-import androidx.annotation.RequiresApi
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import android.Manifest
-import android.content.pm.PackageManager
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
-import android.location.LocationManager
-import android.content.Intent
-import android.provider.Settings
-import android.content.BroadcastReceiver
-import android.content.IntentFilter
-import android.bluetooth.BluetoothDevice
-import androidx.compose.foundation.clickable
-import androidx.compose.runtime.snapshots.SnapshotStateMap
-import androidx.compose.runtime.mutableStateMapOf
-import androidx.compose.runtime.remember
-
+import android.content.pm.PackageManager
+import kotlinx.coroutines.delay
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // Request permissions if not granted
+
+        // Request permissions
         val permissions = arrayOf(
             Manifest.permission.BLUETOOTH,
             Manifest.permission.BLUETOOTH_ADMIN,
@@ -63,214 +58,124 @@ class MainActivity : ComponentActivity() {
             ActivityCompat.requestPermissions(this, missingPermissions.toTypedArray(), 1001)
         }
 
-        setContent {
-            BLEFindMyBoardApp()
-        }
+        setContent { BLEApp() }
     }
 }
 
-// State Holder
-data class BLEUiState(
-    val devices: List<String> = emptyList(),
-    val selectedDevice: BluetoothDevice? = null,
-    val bluetoothEnabled: Boolean = false,
-    val locationEnabled: Boolean = false
-)
-
-//StatusText Computation
-@Composable
-fun getStatusText(
-    bluetoothEnabled: Boolean,
-    locationEnabled: Boolean,
-    selectedDevice: BluetoothDevice?,
-    devicesCount: Int
-): String = when {
-    !bluetoothEnabled && !locationEnabled ->
-        "Enable Bluetooth and Location to scan BLE devices"
-    !bluetoothEnabled -> "Please enable Bluetooth"
-    !locationEnabled -> "Please enable Location"
-    selectedDevice == null && devicesCount == 0 -> "Device Not Connected"
-    selectedDevice == null -> "Devices found: $devicesCount. Select one to connect."
-    else -> "Device Connected: ${selectedDevice.name}"
-}
-
-//BLE Scanner Logic
-@RequiresApi(Build.VERSION_CODES.M)
-fun startBLEScan(
-    bleScanner: BluetoothLeScanner?,
-    devicesMap: SnapshotStateMap<String, BluetoothDevice>,
-    devices: MutableState<List<String>>,
-) {
-    val scanCallback = object : ScanCallback() {
-        override fun onScanResult(callbackType: Int, result: ScanResult) {
-            result.device.name?.let { name ->
-                if (name.isNotBlank() && name !in devices.value) {
-                    devices.value = devices.value + name
-                    devicesMap[name] = result.device
-                }
-            }
-        }
-
-        override fun onScanFailed(errorCode: Int) { /* handle error */ }
-    }
-
-    bleScanner?.startScan(scanCallback)
-}
-
-//Bluetooth and Location Listeners
-@Composable
-fun BluetoothStateListener(
-    bluetoothEnabled: MutableState<Boolean>,
-    selectedDevice: MutableState<BluetoothDevice?>,
-    context: Context
-) {
-    DisposableEffect(context) {
-        val receiver = object : BroadcastReceiver() {
-            override fun onReceive(c: Context?, intent: Intent?) {
-                if (intent?.action == BluetoothAdapter.ACTION_STATE_CHANGED) {
-                    val state = intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.ERROR)
-                    bluetoothEnabled.value = state == BluetoothAdapter.STATE_ON
-                    if (!bluetoothEnabled.value) selectedDevice.value = null
-                }
-            }
-        }
-        context.registerReceiver(receiver, IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED))
-        onDispose { context.unregisterReceiver(receiver) }
-    }
-}
-
-@Composable
-fun LocationStateListener(
-    locationEnabled: MutableState<Boolean>,
-    selectedDevice: MutableState<BluetoothDevice?>,
-    locationManager: LocationManager
-) {
-    LaunchedEffect(Unit) {
-        while (true) {
-            val loc = locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER) ||
-                    locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)
-            if (loc != locationEnabled.value) {
-                locationEnabled.value = loc
-                if (!loc) selectedDevice.value = null
-            }
-            kotlinx.coroutines.delay(1000L)
-        }
-    }
-}
-
-//Device List Composable
-@Composable
-fun DeviceList(
-    devices: List<String>,
-    devicesMap: SnapshotStateMap<String, BluetoothDevice>,
-    selectedDevice: MutableState<BluetoothDevice?>
-) {
-    LazyColumn(modifier = Modifier.fillMaxWidth(0.8f)) {
-        items(devices) { name ->
-            val isSelected = selectedDevice.value?.name == name
-            Text(
-                text = name,
-                fontSize = 15.sp,
-                color = if (isSelected) Color.White else Color.Black,
-                modifier = Modifier
-                    .padding(8.dp)
-                    .fillMaxWidth()
-                    .background(if (isSelected) Color.Blue else Color.Transparent, RoundedCornerShape(4.dp))
-                    .clickable { selectedDevice.value = devicesMap[name] }
-                    .padding(8.dp)
-            )
-        }
-    }
-}
-
-// Main Function
 @RequiresApi(Build.VERSION_CODES.M)
 @Composable
-fun BLEFindMyBoardApp() {
+fun BLEApp() {
     val context = LocalContext.current
-    val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
-    val bluetoothAdapter = bluetoothManager.adapter
-    val bleScanner = bluetoothAdapter?.bluetoothLeScanner
+    val bluetoothAdapter = (context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
+    val scanner = bluetoothAdapter?.bluetoothLeScanner
     val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
 
-    // States
+    val devices = remember { mutableStateListOf<BluetoothDevice>() }
     val selectedDevice = remember { mutableStateOf<BluetoothDevice?>(null) }
-    val devices = remember { mutableStateOf(listOf<String>()) }
-    val devicesMap = remember { mutableStateMapOf<String, BluetoothDevice>() }
+    val connectedDevice = remember { mutableStateOf<BluetoothDevice?>(null) }
+    val gatt = remember { mutableStateOf<BluetoothGatt?>(null) }
+    val isScanning = remember { mutableStateOf(false) }
+
     val bluetoothEnabled = remember { mutableStateOf(bluetoothAdapter.isEnabled) }
     val locationEnabled = remember {
-        mutableStateOf(
-            locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER) ||
-                    locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)
-        )
+        mutableStateOf(locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER))
     }
 
-    // Listeners
-    BluetoothStateListener(bluetoothEnabled, selectedDevice, context)
-    LocationStateListener(locationEnabled, selectedDevice, locationManager)
+    // Monitor BT & Location status
+    LaunchedEffect(Unit) {
+        while (true) {
+            bluetoothEnabled.value = bluetoothAdapter.isEnabled
+            locationEnabled.value = locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)
+            delay(1000)
+        }
+    }
 
-    // Status Text
-    val statusText = getStatusText(bluetoothEnabled.value, locationEnabled.value, selectedDevice.value, devices.value.size)
-
-    // UI
     Column(
         modifier = Modifier.fillMaxSize().background(Color.LightGray).padding(30.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Text(
-            text = statusText,
-            fontSize = 20.sp,
+            text = when {
+                connectedDevice.value != null -> "Connected: ${connectedDevice.value!!.name ?: connectedDevice.value!!.address}"
+                selectedDevice.value != null -> "Selected: ${selectedDevice.value!!.name ?: selectedDevice.value!!.address}"
+                else -> "No device selected"
+            },
+            fontSize = 18.sp,
             textAlign = TextAlign.Center,
-            modifier = Modifier.fillMaxWidth().background(Color.Yellow, RoundedCornerShape(8.dp)).padding(12.dp),
-            maxLines = 3,
-            overflow = TextOverflow.Visible
+            modifier = Modifier.fillMaxWidth().background(Color.Yellow, RoundedCornerShape(8.dp)).padding(12.dp)
         )
-
-        Spacer(Modifier.height(25.dp))
-
-        if (!bluetoothEnabled.value) {
-            Button(
-                onClick = { context.startActivity(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)) },
-                modifier = Modifier.fillMaxWidth(0.7f).height(55.dp)
-            ) { Text("Enable Bluetooth", fontSize = 16.sp) }
-
-            Spacer(Modifier.height(15.dp))
-        }
-
-        if (!locationEnabled.value) {
-            Button(
-                onClick = { context.startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS)) },
-                modifier = Modifier.fillMaxWidth(0.7f).height(55.dp)
-            ) { Text("Enable Location", fontSize = 16.sp) }
-
-            Spacer(Modifier.height(15.dp))
-        }
-
-        Button(
-            onClick = { startBLEScan(bleScanner, devicesMap, devices) },
-            enabled = bluetoothEnabled.value && locationEnabled.value,
-            modifier = Modifier.fillMaxWidth(0.7f).height(55.dp)
-        ) { Text("Scan BLE Devices", fontSize = 16.sp) }
-
-        Spacer(Modifier.height(15.dp))
-
-        Button(
-            onClick = { /* Connect logic */ },
-            enabled = selectedDevice.value != null,
-            modifier = Modifier.fillMaxWidth(0.7f).height(55.dp)
-        ) { Text("Connect Device", fontSize = 16.sp) }
-
-        Spacer(Modifier.height(15.dp))
-
-        Button(
-            onClick = { /* Find command */ },
-            enabled = selectedDevice.value != null,
-            modifier = Modifier.fillMaxWidth(0.7f).height(55.dp)
-        ) { Text("Find My Board", fontSize = 16.sp) }
 
         Spacer(Modifier.height(20.dp))
 
-        DeviceList(devices.value, devicesMap, selectedDevice)
+        if (!bluetoothEnabled.value) {
+            Button(onClick = { context.startActivity(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)) }) {
+                Text("Enable Bluetooth")
+            }
+            Spacer(Modifier.height(10.dp))
+        }
+
+        if (!locationEnabled.value) {
+            Button(onClick = { context.startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS)) }) {
+                Text("Enable Location")
+            }
+            Spacer(Modifier.height(10.dp))
+        }
+
+        if (bluetoothEnabled.value && locationEnabled.value) {
+            Button(onClick = {
+                devices.clear()
+                scanner?.startScan(object : ScanCallback() {
+                    override fun onScanResult(callbackType: Int, result: ScanResult) {
+                        if (!devices.contains(result.device)) devices.add(result.device)
+                    }
+                })
+                isScanning.value = true
+            }) { Text("Scan Devices") }
+
+            Spacer(Modifier.height(10.dp))
+
+            Button(onClick = {
+                scanner?.stopScan(object : ScanCallback() {})
+                isScanning.value = false
+            }, enabled = isScanning.value) { Text("Stop Scan") }
+
+            Spacer(Modifier.height(10.dp))
+
+            Button(onClick = {
+                selectedDevice.value?.let { device ->
+                    gatt.value?.disconnect()
+                    gatt.value = device.connectGatt(context, false, object : BluetoothGattCallback() {
+                        override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
+                            if (newState == BluetoothProfile.STATE_CONNECTED) {
+                                connectedDevice.value = device
+                                gatt.discoverServices()
+                            } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+                                connectedDevice.value = null
+                            }
+                        }
+                    })
+                    Toast.makeText(context, "Connecting to ${device.name ?: device.address}", Toast.LENGTH_SHORT).show()
+                }
+            }, enabled = selectedDevice.value != null) { Text("Connect") }
+        }
+
+        Spacer(Modifier.height(20.dp))
+        LazyColumn {
+            items(devices) { device ->
+                Text(
+                    text = device.name ?: device.address,
+                    color = if (selectedDevice.value == device) Color.White else Color.Black,
+                    fontSize = 16.sp,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { selectedDevice.value = device }
+                        .background(
+                            if (selectedDevice.value == device) Color.Blue else Color.Transparent,
+                            RoundedCornerShape(4.dp)
+                        )
+                        .padding(8.dp)
+                )
+            }
+        }
     }
 }
